@@ -1,0 +1,250 @@
+services:
+  # ============================================================================
+  # INFRASTRUCTURE LAYER
+  # ============================================================================
+  
+  postgres:
+    image: postgres:15-alpine
+    container_name: stream_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./go_database/scripts:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 1G
+        reservations:
+          cpus: '1'
+          memory: 512M
+    networks:
+      - streaming_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: stream_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    networks:
+      - streaming_network
+
+  # ============================================================================
+  # CORE SERVICES - PUBLIC FACING
+  # ============================================================================
+
+  ingest-service:
+    build:
+      context: ./go_ingest
+      dockerfile: Dockerfile
+    container_name: ingest_service
+    restart: unless-stopped
+    depends_on:
+      - stream-service
+    environment:
+      - PROCESSING_ADDR=processing-service:50051
+      - STREAM_SERVICE_ADDR=stream-service:50051
+    ports:
+      - "1935:1935" # RTMP ingestion (public - required)
+    volumes:
+      - ./go_ingest/local_recordings:/app/recordings
+      - ./certs:/app/certs:ro
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    networks:
+      - streaming_network
+
+  distribution-service:
+    build:
+      context: ./go_distribution
+      dockerfile: Dockerfile
+    container_name: distribution_service
+    restart: unless-stopped
+    depends_on:
+      - redis
+      - stream-service
+    environment:
+      - STREAM_SERVICE_ADDR=stream-service:50051
+      - REDIS_ADDR=redis:6379
+      - REDIS_PREFIX=dist:session
+    ports:
+      - "8081:8080" # HTTP Video Distribution (public - required)
+    volumes:
+      - ./certs:/app/certs:ro
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    networks:
+      - streaming_network
+
+  # ============================================================================
+  # CORE SERVICES - INTERNAL ONLY
+  # ============================================================================
+
+  db-service:
+    build:
+      context: ./go_database
+      dockerfile: Dockerfile
+    container_name: db_service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DATABASE_DSN=${DATABASE_DSN}
+      - GRPC_PORT=:50051
+    volumes:
+      - ./certs:/app/certs:ro
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    networks:
+      - streaming_network
+
+  auth-service:
+    build:
+      context: ./go_auth
+      dockerfile: Dockerfile
+    container_name: auth_service
+    restart: unless-stopped
+    depends_on:
+      - redis
+      - db-service
+    environment:
+      - DATABASE_ADDR=db-service:50051
+      - GRPC_PORT=50051
+      - JWT_SECRET=${JWT_SECRET}
+      - RESEND_KEY=${RESEND_KEY}
+      - SENDER_EMAIL=${SENDER_EMAIL}
+      - BASE_URL=${BASE_URL}
+    ports:
+      - "8082:8080"
+    volumes:
+      - ./certs:/app/certs:ro
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    networks:
+      - streaming_network
+
+  stream-service:
+    build:
+      context: ./go_stream
+      dockerfile: Dockerfile
+    container_name: stream_service
+    restart: unless-stopped
+    depends_on:
+      - redis
+      - auth-service
+      - db-service
+    environment:
+      - REDIS_ADDR=redis:6379
+      - AUTH_SERVICE_ADDR=auth-service:50051
+      - DB_SERVICE_ADDR=db-service:50051
+      - USER_SERVICE_ADDR=db-service:50051
+    ports:
+      - "8083:8080"
+    volumes:
+      - ./certs:/app/certs:ro
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    networks:
+      - streaming_network
+
+  processing-service:
+    build:
+      context: ./go_processing
+      dockerfile: Dockerfile
+    container_name: processing_service
+    restart: unless-stopped
+    depends_on:
+      - stream-service
+    environment:
+      - FFMPEG_PATH=${FFMPEG_PATH:-/usr/bin/ffmpeg}
+      - PROCESSING_DISABLE_1080P=${PROCESSING_DISABLE_1080P:-false}
+      - DISTRIBUTION_ADDR=distribution-service:9000
+      - STREAM_SERVICE_ADDR=stream-service:50051
+      - TLS_SERVER_NAME=${TLS_SERVER_NAME:-localhost}
+      - GRPC_AUTHORITY_OVERRIDE=${GRPC_AUTHORITY_OVERRIDE}
+    volumes:
+      - ./go_processing/buffers:/root/buffers
+      - ./certs:/root/certs:ro
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1.5G
+        reservations:
+          cpus: '1.5'
+          memory: 1G
+    networks:
+      - streaming_network
+
+# ============================================================================
+# VOLUMES - PERSISTENT DATA
+# ============================================================================
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+# ============================================================================
+# NETWORKS - SERVICE ISOLATION
+# ============================================================================
+
+networks:
+  streaming_network:
+    driver: bridge

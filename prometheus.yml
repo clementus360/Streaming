@@ -1,0 +1,80 @@
+# Prometheus Configuration for Streaming Platform
+# Scrapes metrics from all microservices
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'streaming-platform'
+
+# Alertmanager configuration (optional)
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+rule_files:
+  # - "alert_rules.yml"
+
+scrape_configs:
+  # ============================================================================
+  # INFRASTRUCTURE
+  # ============================================================================
+
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres:5432']
+    # Requires postgres_exporter (optional addon)
+
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']
+    # Requires redis_exporter (optional addon)
+
+  # ============================================================================
+  # MICROSERVICES (if they expose metrics on /metrics)
+  # ============================================================================
+
+  - job_name: 'processing-service'
+    static_configs:
+      - targets: ['processing-service:8081']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'distribution-service'
+    static_configs:
+      - targets: ['distribution-service:8080']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'stream-service'
+    static_configs:
+      - targets: ['stream-service:8080']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'auth-service'
+    static_configs:
+      - targets: ['auth-service:8080']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'ingest-service'
+    static_configs:
+      - targets: ['ingest-service:50051']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'db-service'
+    static_configs:
+      - targets: ['db-service:50051']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # ============================================================================
+  # PROMETHEUS SELF-MONITORING
+  # ============================================================================
+
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
