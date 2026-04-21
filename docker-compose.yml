@@ -15,7 +15,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./go_database/scripts:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -h localhost -p 5432 -U ${POSTGRES_USER} || exit 1"]
+      test: ["CMD-SHELL", "pg_isready -h localhost -p 5432 -U ${POSTGRES_USER} -d ${POSTGRES_DB} || exit 1"]
       start_period: 30s
       interval: 10s
       timeout: 5s
@@ -86,6 +86,15 @@ services:
       - STREAM_SERVICE_ADDR=stream-service:50051
       - REDIS_ADDR=redis:6379
       - REDIS_PREFIX=dist:session
+      - R2_ENABLED=${R2_ENABLED:-false}
+      - R2_ACCOUNT_ID=${R2_ACCOUNT_ID:-}
+      - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID:-}
+      - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY:-}
+      - R2_BUCKET=${R2_BUCKET:-}
+      - R2_PUBLIC_BASE_URL=${R2_PUBLIC_BASE_URL:-}
+      - R2_KEY_PREFIX=${R2_KEY_PREFIX:-hls}
+      - R2_UPLOAD_TIMEOUT=${R2_UPLOAD_TIMEOUT:-4s}
+      - R2_REDIRECT_SEGMENTS=${R2_REDIRECT_SEGMENTS:-false}
     ports:
       - "8081:8080" # HTTP Video Distribution (public - required)
     volumes:
